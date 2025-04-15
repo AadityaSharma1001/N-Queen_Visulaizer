@@ -1,211 +1,311 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useRef, useEffect } from 'react';
 
-const computeTraceSteps = (n) => {
-  const traceSteps = [];
-  const board = Array(n).fill(-1);
-
-  const isSafe = (col, row) => {
-    for (let prev = 0; prev < col; prev++) {
-      if (board[prev] === row || Math.abs(board[prev] - row) === col - prev) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  const solve = (col) => {
-    if (col === n) {
-      traceSteps.push({ board: [...board], candidate: null, status: "solution" });
+// Helper: Array-based backtracking generator.
+function* solveNQueensArray(n) {
+  const board = new Array(n);
+  function* backtrack(row) {
+    if (row === n) {
+      yield { board: board.slice(), action: "solution" };
       return;
     }
-    for (let row = 0; row < n; row++) {
-      traceSteps.push({ board: [...board], candidate: { col, row }, status: "attempt" });
-      if (isSafe(col, row)) {
-        board[col] = row;
-        traceSteps.push({ board: [...board], candidate: { col, row }, status: "placed" });
-        solve(col + 1);
-        board[col] = -1;
-        traceSteps.push({ board: [...board], candidate: { col, row }, status: "backtrack" });
-      }
-    }
-  };
-
-  solve(0);
-  return traceSteps;
-};
-
-const Board = ({ boardState, candidate, candidateStatus, n, cellSize = 40 }) => {
-  return (
-    <div
-      className="grid border relative"
-      style={{
-        gridTemplateColumns: `repeat(${n}, ${cellSize}px)`,
-        gridTemplateRows: `repeat(${n}, ${cellSize}px)`,
-      }}
-    >
-      {Array.from({ length: n * n }).map((_, idx) => {
-        const row = Math.floor(idx / n);
-        const col = idx % n;
-        const isQueen = boardState && boardState[col] === row;
-        const baseColor = (row + col) % 2 === 0 ? "bg-gray-200" : "bg-gray-600";
-        let overlay = null;
-        if (candidate && candidate.col === col && candidate.row === row) {
-          if (candidateStatus === "attempt") {
-            overlay = <div className="absolute inset-0 bg-green-400 opacity-50 pointer-events-none"></div>;
-          } else if (candidateStatus === "backtrack") {
-            overlay = <div className="absolute inset-0 bg-red-500 opacity-50 pointer-events-none"></div>;
-          }
+    for (let col = 0; col < n; col++) {
+      let valid = true;
+      for (let r = 0; r < row; r++) {
+        if (board[r] === col || Math.abs(board[r] - col) === row - r) {
+          valid = false;
+          break;
         }
-        return (
-          <div
-            key={idx}
-            className={`relative flex items-center justify-center border ${baseColor}`}
-            style={{ width: cellSize, height: cellSize }}
-          >
-            {isQueen && <span className="text-xl">♛</span>}
-            {overlay}
-          </div>
-        );
-      })}
+      }
+      if (valid) {
+        board[row] = col;
+        yield { row, col, action: "place", board: board.slice() };
+        yield* backtrack(row + 1);
+        yield { row, col, action: "remove", board: board.slice() };
+        board[row] = undefined;
+      }
+    }
+  }
+  yield* backtrack(0);
+}
+
+// Helper: Bitmasking backtracking generator.
+function* solveNQueensBitmask(n) {
+  const board = new Array(n);
+  function* backtrack(row, columns, diag1, diag2) {
+    if (row === n) {
+      yield { board: board.slice(), action: "solution" };
+      return;
+    }
+    let available = ((1 << n) - 1) & ~(columns | diag1 | diag2);
+    while (available) {
+      const pick = available & -available;
+      const col = Math.log2(pick);
+      board[row] = col;
+      yield { row, col, action: "place", board: board.slice() };
+      yield* backtrack(
+        row + 1,
+        columns | pick,
+        (diag1 | pick) << 1,
+        (diag2 | pick) >> 1
+      );
+      yield { row, col, action: "remove", board: board.slice() };
+      board[row] = undefined;
+      available &= available - 1;
+    }
+  }
+  yield* backtrack(0, 0, 0, 0);
+}
+
+// Count solutions synchronously for Array-based approach.
+function countSolutionsArray(n) {
+  let count = 0;
+  const board = new Array(n);
+  function backtrack(row) {
+    if (row === n) {
+      count++;
+      return;
+    }
+    for (let col = 0; col < n; col++) {
+      let valid = true;
+      for (let r = 0; r < row; r++) {
+        if (board[r] === col || Math.abs(board[r] - col) === row - r) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) {
+        board[row] = col;
+        backtrack(row + 1);
+        board[row] = undefined;
+      }
+    }
+  }
+  backtrack(0);
+  return count;
+}
+
+// Count solutions synchronously for Bitmasking approach.
+function countSolutionsBitmask(n) {
+  let count = 0;
+  function backtrack(row, columns, diag1, diag2) {
+    if (row === n) {
+      count++;
+      return;
+    }
+    let available = ((1 << n) - 1) & ~(columns | diag1 | diag2);
+    while (available) {
+      const pick = available & -available;
+      available &= available - 1;
+      backtrack(
+        row + 1,
+        columns | pick,
+        (diag1 | pick) << 1,
+        (diag2 | pick) >> 1
+      );
+    }
+  }
+  backtrack(0, 0, 0, 0);
+  return count;
+}
+
+// Component to render a chess board with queens.
+const Board = ({ board, n, highlightedCell }) => {
+  const cellStyle =
+    "w-12 h-12 flex justify-center items-center border border-gray-300 text-2xl transition-colors duration-200";
+  const boardRows = [];
+  for (let row = 0; row < n; row++) {
+    const cells = [];
+    for (let col = 0; col < n; col++) {
+      const hasQueen = board && board[row] === col;
+      const isHighlighted =
+        highlightedCell &&
+        highlightedCell.row === row &&
+        highlightedCell.col === col;
+      cells.push(
+        <div
+          key={col}
+          className={`${cellStyle} ${isHighlighted ? "bg-blue-200" : "bg-white"}`}
+        >
+          {hasQueen ? "♛" : ""}
+        </div>
+      );
+    }
+    boardRows.push(
+      <div key={row} className="flex">
+        {cells}
+      </div>
+    );
+  }
+  return (
+    <div className="inline-block shadow-lg rounded-md overflow-hidden">
+      {boardRows}
     </div>
   );
 };
 
-const NQueenVisualizer = () => {
-  const [n, setN] = useState(8);
-  const [traceSteps, setTraceSteps] = useState([]);
-  const [finalSolutions, setFinalSolutions] = useState([]);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [currentStep, setCurrentStep] = useState({ board: Array(n).fill(-1), candidate: null, status: null });
-  const [isVisualizing, setIsVisualizing] = useState(false);
-  const [speed, setSpeed] = useState(500);
-  const [showThumbnails, setShowThumbnails] = useState(true);
-  const [animateSlide, setAnimateSlide] = useState(false);
-  const visualizeRef = useRef(false);
+const NQueensVisualizer = () => {
+  const [queenCount, setQueenCount] = useState(4);
+  const [speed, setSpeed] = useState(500); // delay in ms
+  const [algorithm, setAlgorithm] = useState("array"); // 'array' or 'bitmasking'
+  const [totalSolutions, setTotalSolutions] = useState(null);
+  const [computeTime, setComputeTime] = useState(null);
+  const [currentBoard, setCurrentBoard] = useState([]);
+  const [highlight, setHighlight] = useState(null);
+  const [solutions, setSolutions] = useState([]); // list of final solutions boards
+  const [running, setRunning] = useState(false);
+  const genRef = useRef(null);
+  const speedRef = useRef(speed);
 
+  // Update the speed reference every time speed changes.
   useEffect(() => {
-    setTraceSteps([]);
-    setFinalSolutions([]);
-    setCurrentStep({ board: Array(n).fill(-1), candidate: null, status: null });
-    setShowThumbnails(true);
-    setIsVisualizing(false);
-  }, [n]);
+    speedRef.current = speed;
+  }, [speed]);
 
-  const handleFindSolutions = () => {
-    const trace = computeTraceSteps(n);
-    setTraceSteps(trace);
-    const finals = trace.filter((step) => step.status === "solution").map((step) => step.board);
-    setFinalSolutions(finals);
-    setCurrentStepIndex(0);
-    setCurrentStep({ board: Array(n).fill(-1), candidate: null, status: null });
+  // Compute statistics and count solutions.
+  const computeStatistics = () => {
+    const n = parseInt(queenCount);
+    const startTime = performance.now();
+    let count;
+    if (algorithm === "array") {
+      count = countSolutionsArray(n);
+    } else {
+      count = countSolutionsBitmask(n);
+    }
+    const endTime = performance.now();
+    setTotalSolutions(count);
+    setComputeTime((endTime - startTime).toFixed(2));
   };
 
-  const visualizeTrace = async () => {
-    if (!traceSteps.length) return;
-    setIsVisualizing(true);
-    visualizeRef.current = true;
-    setShowThumbnails(false);
-
-    for (let i = 0; i < traceSteps.length; i++) {
-      if (!visualizeRef.current) break;
-      setCurrentStep(traceSteps[i]);
-      setCurrentStepIndex(i);
-      await new Promise((resolve) => setTimeout(resolve, speed));
-
-      if (traceSteps[i].status === "solution") {
-        await new Promise((resolve) => setTimeout(resolve, speed * 2));
-        setAnimateSlide(true);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setAnimateSlide(false);
+  // Step through the generator for the animation.
+  const stepGenerator = () => {
+    if (!genRef.current) return;
+    const next = genRef.current.next();
+    if (!next.done) {
+      const step = next.value;
+      if (step.action === "place" || step.action === "remove") {
+        setCurrentBoard(step.board);
+        setHighlight({ row: step.row, col: step.col, action: step.action });
       }
+      if (step.action === "solution") {
+        setSolutions((prev) => [...prev, step.board]);
+      }
+      setTimeout(stepGenerator, speedRef.current); // read the current speed from ref
+    } else {
+      setRunning(false);
+      setHighlight(null);
     }
+  };
 
-    setIsVisualizing(false);
-    visualizeRef.current = false;
-    setShowThumbnails(true);
+  const startVisualization = () => {
+    setSolutions([]);
+    setCurrentBoard(Array.from({ length: queenCount }, () => undefined));
+    setTotalSolutions(null);
+    setComputeTime(null);
+    setHighlight(null);
+    setRunning(true);
+
+    computeStatistics();
+
+    const n = parseInt(queenCount);
+    if (algorithm === "array") {
+      genRef.current = solveNQueensArray(n);
+    } else {
+      genRef.current = solveNQueensBitmask(n);
+    }
+    setTimeout(stepGenerator, speedRef.current);
   };
 
   return (
-    <div className="flex flex-col items-center gap-6 p-4">
-      <div className="flex flex-col gap-2 items-center">
-        <div className="flex gap-2 items-center">
-          <label className="text-lg font-bold">Board Size (N):</label>
-          <input
-            type="number"
-            min="4"
-            max="12"
-            value={n}
-            onChange={(e) => setN(parseInt(e.target.value) || 4)}
-            className="border rounded px-2 py-1 w-16"
-            disabled={isVisualizing}
-          />
-          <button
-            onClick={handleFindSolutions}
-            disabled={isVisualizing}
-            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-700 disabled:bg-gray-400"
-          >
-            Find Solutions
-          </button>
-        </div>
-        <div className="flex gap-2 items-center">
-          <label className="text-lg font-bold">Speed (ms):</label>
-          <input
-            type="range"
-            min="100"
-            max="2000"
-            step="100"
-            value={speed}
-            onChange={(e) => setSpeed(Number(e.target.value))}
-            className="w-48"
-            disabled={isVisualizing}
-          />
-          <span>{speed} ms</span>
-        </div>
-        <button
-          onClick={visualizeTrace}
-          disabled={traceSteps.length === 0 || isVisualizing}
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400"
-        >
-          {isVisualizing ? "Visualizing..." : "Visualize"}
-        </button>
-      </div>
-
-      {finalSolutions.length > 0 && (
-        <div
-          className={`w-full max-w-4xl transition-opacity duration-500 ${
-            showThumbnails ? "opacity-100" : "opacity-0 pointer-events-none"
-          }`}
-        >
-          <p className="text-center font-bold">
-            Total Solutions: {finalSolutions.length}
-          </p>
-          <div className="grid grid-cols-4 gap-2 overflow-auto max-h-96 border p-2">
-            {finalSolutions.map((solution, idx) => (
-              <div
-                key={idx}
-                className={`border ${idx === currentStepIndex ? "ring-2 ring-blue-500" : ""}`}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center p-6">
+      <div className="bg-white shadow-2xl rounded-xl p-8 max-w-4xl w-full">
+        <h2 className="text-3xl font-bold text-center mb-6">N-Queen Visualizer</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block mb-3">
+              <span className="text-lg font-medium">Number of Queens:</span>
+              <input
+                type="number"
+                min="4"
+                value={queenCount}
+                onChange={(e) => setQueenCount(e.target.value)}
+                disabled={running}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 px-3 py-2"
+              />
+            </label>
+            <label className="block mb-3">
+              <span className="text-lg font-medium">Visualization Speed (ms):</span>
+              <input
+                type="range"
+                min="100"
+                max="1000"
+                step="50"
+                value={speed}
+                onChange={(e) => setSpeed(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <span className="text-gray-700">{speed} ms</span>
+            </label>
+            <label className="block mb-3">
+              <span className="text-lg font-medium">Algorithm:</span>
+              <select
+                value={algorithm}
+                onChange={(e) => setAlgorithm(e.target.value)}
+                disabled={running}
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
               >
-                <Board boardState={solution} n={n} cellSize={20} />
+                <option value="array">Array-based</option>
+                <option value="bitmasking">Bitmasking</option>
+              </select>
+            </label>
+            <button
+              onClick={startVisualization}
+              disabled={running}
+              className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-md transition-colors duration-200 disabled:opacity-50"
+            >
+              {running ? "Running..." : "Start"}
+            </button>
+          </div>
+          <div className="flex flex-col items-center justify-center">
+            {totalSolutions !== null && computeTime !== null && (
+              <div className="bg-blue-50 p-4 rounded-md shadow-md w-full text-center">
+                <h3 className="text-xl font-semibold mb-2">Statistics</h3>
+                <p>
+                  Total Solutions: <span className="font-medium">{totalSolutions}</span>
+                </p>
+                <p>
+                  Time Taken: <span className="font-medium">{computeTime} ms</span>
+                </p>
               </div>
-            ))}
+            )}
           </div>
         </div>
-      )}
-
-      <div
-        className={`mt-4 transition-transform duration-500 ${animateSlide ? "-translate-y-20" : "translate-y-0"}`}
-      >
-        <p className="font-bold">Visualization:</p>
-        <Board
-          boardState={currentStep.board}
-          candidate={currentStep.candidate}
-          candidateStatus={currentStep.status}
-          n={n}
-          cellSize={40}
-        />
+        <div className="mt-8">
+          <h3 className="text-2xl font-bold mb-4 text-center">Live Visualization</h3>
+          <div className="flex justify-center">
+            <Board
+              board={currentBoard}
+              n={parseInt(queenCount)}
+              highlightedCell={highlight}
+            />
+          </div>
+        </div>
+        <div className="mt-8">
+          <h3 className="text-2xl font-bold mb-4 text-center">Found Solutions</h3>
+          {solutions.length === 0 ? (
+            <p className="text-center text-gray-600">No complete solution yet.</p>
+          ) : (
+            <div className="flex flex-wrap justify-center gap-4">
+              {solutions.map((sol, index) => (
+                <div key={index} className="bg-gray-50 p-2 rounded-md shadow-md">
+                  <Board board={sol} n={parseInt(queenCount)} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
 
-export default NQueenVisualizer;
+export default NQueensVisualizer;
